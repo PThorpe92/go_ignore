@@ -8,13 +8,14 @@ import (
 )
 
 func main() {
-	fmt.Println("TEST!")
+	fmt.Println("TEST!") //Test directory filenames
 	dirlist := []string{"someifle.tmp", "home/etc", "main.go", "readme.md", "scene.nfo", "lotsoffiles.tmp", "build", "build/main.exe", "file.go", "anotherfile.go", "success.go"}
-	gitig, err := ParseGitIgnore(".gitignore")
+	gitig, err := Check("./")
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error checking for .gitignore file %s\n", err)
+		return
 	}
-	fmt.Println("%s", gitig.Rules)
+	fmt.Printf("Rules to ignore: \n%v\n", gitig.Rules)
 	for _, word := range dirlist {
 		stat, err := os.Stat(word)
 		if err != nil {
@@ -23,16 +24,24 @@ func main() {
 		if stat.IsDir() {
 			fmt.Println("dir")
 			if gitig.IsIgnored(word, true) {
-				fmt.Println("%s", gitig.IgnoredFolders)
+				fmt.Printf("Ignored folders: \n%v\n", gitig.IgnoredFolders)
 			}
 		} else {
 			fmt.Println("add")
 			fmt.Println("not a dir")
 			if gitig.IsIgnored(word, false) {
-				fmt.Println("%s", gitig.IgnoredFiles)
+				fmt.Printf("Ignored files: \n%v\n", gitig.IgnoredFiles)
 			}
 		}
 	}
+}
+
+type GitignoreNotFoundError struct {
+	dir string
+}
+
+func (e GitignoreNotFoundError) Error() string {
+	return fmt.Sprintf("gitignore file not found in directory %s", e.dir)
 }
 
 type GitIgnore struct {
@@ -49,13 +58,14 @@ type Rules struct {
 	Negate    []*regexp.Regexp
 }
 
-// This function parses .gitignore files and returns our objects
-// updated with list of files we need to ignore
-func ParseGitIgnore(filename string) (*GitIgnore, error) {
+// This looks for a .gitignore file in the supplied path and returns
+// an object with the rules for ignoring files/folders.
+func Check(path string) (*GitIgnore, error) {
 	var ignoreList = new(GitIgnore)
 	var rules = new(Rules)
-	file, err := os.ReadFile(filename)
+	file, err := os.ReadFile(fmt.Sprintf("%s/.testignore", path))
 	if err != nil {
+
 		return nil, err
 	}
 	rules.Directory = make([]*regexp.Regexp, 0)
@@ -68,11 +78,9 @@ func ParseGitIgnore(filename string) (*GitIgnore, error) {
 		strline := strings.TrimSpace(line)
 		if strline == "" || strings.HasPrefix(strline, "#") {
 			continue
-		}
-
+		} //TODO
 		if strings.HasPrefix(strline, "!") {
 			if strings.Contains(strline[1:], "*") {
-				strings.Replace(strline, "*", "./", 2)
 			}
 			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline[1:]) + `()$`)
 			if err != nil {
@@ -85,20 +93,20 @@ func ParseGitIgnore(filename string) (*GitIgnore, error) {
 
 		// Check for negation rules that apply to the current line
 		if negation {
-			for i := 0; i < len(rules.Directory); i++ {
+			for i := 0; i < len(rules.Directory); i++ { // TODO
 				if rules.Directory[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
 					rules.Directory = append(rules.Directory[:i], rules.Directory[i+1:]...)
 					i--
 				}
 			}
-			for i := 0; i < len(rules.Character); i++ {
+			for i := 0; i < len(rules.Character); i++ { //TODO
 				if rules.Character[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
 					rules.Character = append(rules.Character[:i], rules.Character[i+1:]...)
 					i--
 				}
 			}
-			for i := 0; i < len(rules.Subdir); i++ {
-				if rules.Subdir[i].String() == strings.ReplaceAll(regexp.QuoteMeta(strline), "**", `\.*/`) {
+			for i := 0; i < len(rules.Subdir); i++ { //TODO
+				if rules.Subdir[i].String() == strings.ReplaceAll(regexp.QuoteMeta(strline), "**", " ") {
 					rules.Subdir = append(rules.Subdir[:i], rules.Subdir[i+1:]...)
 					i--
 				}
@@ -106,14 +114,14 @@ func ParseGitIgnore(filename string) (*GitIgnore, error) {
 			negation = false
 			continue
 		}
-		if strings.HasPrefix(strline, "/") {
+		if strings.HasPrefix(strline, "/") { //TODO
 			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + `(\\/\.*)\?$`)
 			if err != nil {
 				return nil, err
 			}
 			rules.Directory = append(rules.Directory, pattern)
 		}
-		if strings.Contains(strline, "**") {
+		if strings.Contains(strline, "**") { //TODO
 			pattern, err := regexp.Compile(strings.ReplaceAll(regexp.QuoteMeta(strline), "**", `\./*`))
 			if err != nil {
 				return nil, err

@@ -1,0 +1,14 @@
+# Ignore .testignore files
+*.testignore
+
+# Ignore /build/etc directories
+/build/etc/
+
+# Ignore .rs files
+*.rs
+
+# Ignore files with the word "data" in their name
+*data*
+
+# Ignore the /home directory and all its subdirectories
+/home/
