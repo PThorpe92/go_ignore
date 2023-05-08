@@ -76,6 +76,7 @@ type GitIgnore struct {
 	TotalFiles     int
 	TotalFolders   int
 }
+
 type Rules struct {
 	Directory []*regexp.Regexp
 	Character []*regexp.Regexp
@@ -84,7 +85,7 @@ type Rules struct {
 }
 
 // This looks for a .gitignore file in the supplied path and returns
-// an object with the rules for ignoring files/folders.
+// an object with the rules for ignoring files/folders. 
 func Check(path string) (*GitIgnore, error) {
 	var ignoreList = new(GitIgnore)
 	var rules = new(Rules)
@@ -113,68 +114,80 @@ func Check(path string) (*GitIgnore, error) {
 	for _, line := range lines {
 		strline := strings.TrimSpace(line)
 		if strline == "" || strings.HasPrefix(strline, "#") {
-			continue
-		} //TODO
-		if strings.HasPrefix(strline, "!") {
-			if strings.Contains(strline[1:], "*") {
-			}
-			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline[1:]) + `()$`)
-			if err != nil {
-				return nil, err
-			}
-			rules.Negate = append(rules.Negate, pattern)
-			negation = true
-			continue
-		}
-
-		// Check for negation rules that apply to the current line
-		if negation {
-			for i := 0; i < len(rules.Directory); i++ { // TODO
-				if rules.Directory[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
-					rules.Directory = append(rules.Directory[:i], rules.Directory[i+1:]...)
-					i--
-				}
-			}
-			for i := 0; i < len(rules.Character); i++ { //TODO
-				if rules.Character[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
-					rules.Character = append(rules.Character[:i], rules.Character[i+1:]...)
-					i--
-				}
-			}
-			for i := 0; i < len(rules.Subdir); i++ { //TODO
-				if rules.Subdir[i].String() == strings.ReplaceAll(regexp.QuoteMeta(strline), "**", " ") {
-					rules.Subdir = append(rules.Subdir[:i], rules.Subdir[i+1:]...)
-					i--
-				}
-			}
-			negation = false
-			continue
-		}
-		if strings.HasPrefix(strline, "/") { //TODO
-			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + `(\\/\.*)\?$`)
-			if err != nil {
-				return nil, err
-			}
-			rules.Directory = append(rules.Directory, pattern)
-		}
-		if strings.Contains(strline, "**") { //TODO
-			pattern, err := regexp.Compile(strings.ReplaceAll(regexp.QuoteMeta(strline), "**", `\./*`))
-			if err != nil {
-				return nil, err
-			}
-			rules.Subdir = append(rules.Subdir, pattern)
-		}
-		if strings.ContainsAny(strline, "[]") {
-			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + "$")
-			if err != nil {
-				return nil, err
-			}
-			rules.Character = append(rules.Character, pattern)
-		}
-	}
-	ignoreList.Rules = rules
-	return ignoreList, nil
+    continue
 }
+if strings.HasPrefix(strline, "!") {
+    // Handle negation rules
+    // If the pattern contains a '*', convert it to '.*' for regex
+    if strings.Contains(strline[1:], "*") {
+        strline = strings.ReplaceAll(strline, "*", ".*")
+    }
+    pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline[1:]) + `()$`)
+    if err != nil {
+        return nil, err
+    }
+    rules.Negate = append(rules.Negate, pattern)
+    negation = true
+    continue
+}
+
+// Check for negation rules that apply to the current line
+if negation {
+    for i := 0; i < len(rules.Directory); i++ {
+        if rules.Directory[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
+            rules.Directory = append(rules.Directory[:i], rules.Directory[i+1:]...)
+            i--
+        }
+    }
+    for i := 0; i < len(rules.Character); i++ {
+        if rules.Character[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
+            rules.Character = append(rules.Character[:i], rules.Character[i+1:]...)
+            i--
+        }
+    }
+    for i := 0; i < len(rules.Subdir); i++ {
+        if strings.Contains(rules.Subdir[i].String(), "**") {
+            // If the rule contains '**', replace it with '.*' before comparing with strline
+            str := strings.ReplaceAll(regexp.QuoteMeta(strline), "**", ".*")
+            if rules.Subdir[i].String() == "^"+str+"$" {
+                rules.Subdir = append(rules.Subdir[:i], rules.Subdir[i+1:]...)
+                i--
+            }
+        } else {
+            if rules.Subdir[i].String() == "^"+regexp.QuoteMeta(strline)+"(/.*)?$" {
+                rules.Subdir = append(rules.Subdir[:i], rules.Subdir[i+1:]...)
+                i--
+            }
+        }
+    }
+    negation = false
+    continue
+}
+if strings.HasPrefix(strline, "/") {
+    // Handle directory rules
+    pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + `(/\.*)?\?$`)
+    if err != nil {
+        return nil, err
+    }
+    rules.Directory = append(rules.Directory, pattern)
+}
+if strings.Contains(strline, "**") {
+    // Handle subdirectory rules
+    pattern, err := regexp.Compile("^" + strings.ReplaceAll(regexp.QuoteMeta(strline), "**", `.*`) + `$`)
+    if err != nil {
+        return nil, err
+    }
+    rules.Subdir = append(rules.Subdir, pattern)
+}
+if strings.ContainsAny(strline, "[]") {
+    // Handle character rules
+    pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + "$")
+    if err != nil {
+        return nil, err
+    }
+    rules.Character = append(rules.Character, pattern)
+}
+
 
 func (g *GitIgnore) IsIgnored(file string, isDir bool) bool {
 	for _, rule := range g.Rules.Negate {
