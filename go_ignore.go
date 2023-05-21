@@ -60,13 +60,12 @@ func main() {
 		}
 	}
 }
-
 type GitignoreNotFoundError struct {
 	dir string
 }
 
 func (e GitignoreNotFoundError) Error() string {
-	return fmt.Sprintf("gitignore file not found in directory %s", e.dir)
+	return fmt.Errorf("gitignore file not found in directory %s", e.dir)
 }
 
 type GitIgnore struct {
@@ -83,24 +82,34 @@ type Rules struct {
 	Subdir    []*regexp.Regexp
 	Negate    []*regexp.Regexp
 }
+func CheckWD(path string) (*GitIgnore, error) {
+	if path == "." {
+		cwd, err := os.Getwd()
+		if err != nil {
+			err = fmt.Errorf("Error with supplied path (symbolic link)")
+			return nil, err
+		}
+	path = cwd
+	}
+        path = filepath.Join(path, ".gitignore")
+	_, err := os.Stat(path)
+	if err != nil {
+		err = fmt.Errorf("No .gitignore file found in the specified filepath \n")
+		return nil, err
+	} 
+    	ignoreFile, err := parseGitignore(path)
+	if err != nil {
+	err = fmt.Errorf("Error parsing .gitignore file, improper format?")
+	return nil, err
+    }
+	return ignoreFile, nil
+}
 
 // This looks for a .gitignore file in the supplied path and returns
 // an object with the rules for ignoring files/folders. 
-func Check(path string) (*GitIgnore, error) {
-	var ignoreList = new(GitIgnore)
+func parseGitignore(path string) (*GitIgnore, error) {
 	var rules = new(Rules)
-	var err error
-	if path == "." || path == "./" || path == "" {
-		path, err = os.Getwd()
-		if err != nil {
-			return nil, err
-		}
-	}
-	_, err = os.Stat(filepath.Join(path, ".gitignore"))
-	if err != nil {
-		return nil, err
-	}
-	file, err := os.ReadFile()
+	file, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +117,7 @@ func Check(path string) (*GitIgnore, error) {
 	rules.Directory = make([]*regexp.Regexp, 0)
 	rules.Subdir = make([]*regexp.Regexp, 0)
 	rules.Character = make([]*regexp.Regexp, 0)
-	str := string(file.Name())
+	str := string(file)
 	lines := strings.Split(str, "\n")
 	var negation bool
 	for _, line := range lines {
@@ -116,6 +125,7 @@ func Check(path string) (*GitIgnore, error) {
 		if strline == "" || strings.HasPrefix(strline, "#") {
     continue
 }
+
 if strings.HasPrefix(strline, "!") {
     // Handle negation rules
     // If the pattern contains a '*', convert it to '.*' for regex
@@ -133,18 +143,21 @@ if strings.HasPrefix(strline, "!") {
 
 // Check for negation rules that apply to the current line
 if negation {
+
     for i := 0; i < len(rules.Directory); i++ {
         if rules.Directory[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
             rules.Directory = append(rules.Directory[:i], rules.Directory[i+1:]...)
             i--
         }
     }
+
     for i := 0; i < len(rules.Character); i++ {
         if rules.Character[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
             rules.Character = append(rules.Character[:i], rules.Character[i+1:]...)
             i--
         }
     }
+
     for i := 0; i < len(rules.Subdir); i++ {
         if strings.Contains(rules.Subdir[i].String(), "**") {
             // If the rule contains '**', replace it with '.*' before comparing with strline
@@ -187,15 +200,22 @@ if strings.ContainsAny(strline, "[]") {
     }
     rules.Character = append(rules.Character, pattern)
 }
-
+    }
+    result := new(GitIgnore)
+    result.Rules = rules
+    return result, nil
+}
 
 func (g *GitIgnore) IsIgnored(file string, isDir bool) bool {
+	if !isDir{
+
 	for _, rule := range g.Rules.Negate {
 		if rule.MatchString(file) {
 			fmt.Println("success")
 			return false
 		}
 	}
+
 	for _, rule := range g.Rules.Character {
 		if rule.MatchString(file) {
 			g.IgnoredFiles = append(g.IgnoredFiles, file)
@@ -203,7 +223,7 @@ func (g *GitIgnore) IsIgnored(file string, isDir bool) bool {
 			return true
 		}
 	}
-	if isDir {
+    } else {
 		for _, rule := range g.Rules.Directory {
 			if rule.MatchString(file) {
 				g.IgnoredFolders = append(g.IgnoredFolders, file)
