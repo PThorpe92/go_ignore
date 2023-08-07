@@ -1,6 +1,8 @@
 package go_ignore
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +43,16 @@ func (e GitignoreNotFoundError) Error() string {
 	return fmt.Sprintf("gitignore file not found in directory %s", e.Dir)
 }
 
+type ParsingGitignoreError struct {
+	Dir string
+}
+
+func (e ParsingGitignoreError) Error() string {
+	return fmt.Sprintf("Error parsing the .gitignore file found in directory %s", e.Dir)
+}
+
 type GitIgnore struct {
+	Path         string
 	Rules        *Rules
 	IgnoredFiles []string
 	TotalFiles   int
@@ -53,134 +64,149 @@ type Rules struct {
 	Subdir    []*regexp.Regexp
 	Negate    []*regexp.Regexp
 }
+type Pattern struct {
+	Line        string
+	Line_number string
+	Negate      bool
+	Match       *regexp.Regexp
+}
 
-// This function checks the supplied path for a .gitignorefile
-// and returns the compiled object which paths can be checked against with
-// the IsIgnored method.
+/*
+If the absolute path to the .gitignore file isn't provided, the function
+checks the supplied path for one and returns the compiled object which paths
+can be checked against with
+the IsIgnored method.
+*/
+
 func CheckPath(path string) (*GitIgnore, error) {
-
 	if path == "." {
-		path, err := os.Getwd()
+		cwd, err := os.Getwd()
 		if err != nil {
-			err = fmt.Errorf("Error with supplied path (symbolic link)")
-			return nil, err
+			return nil, fmt.Errorf("Error with supplied path (symbolic link)")
 		}
-		if !strings.Contains(path, ".gitignore") {
-			path = filepath.Join(path, ".gitignore")
-			_, err = os.Stat(path)
-			if err != nil {
-				err = fmt.Errorf("No .gitignore file found in the specified filepath \n")
-				return nil, err
-			}
-		}
+		path = cwd
 	}
+
+	if path[len(path)-1] != filepath.Separator {
+		path += string(filepath.Separator)
+	}
+	path = filepath.Join(path, ".gitignore")
+
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("Gitignore file not found in directory %s", filepath.Dir(path))
+	} else if err != nil {
+		return nil, fmt.Errorf("Error checking .gitignore file: %v", err)
+	}
+
 	ignoreFile, err := parseGitignore(path)
 	if err != nil {
-		err = fmt.Errorf("Error parsing .gitignore file, improper format?")
-		return nil, err
+		return nil, fmt.Errorf("Error parsing .gitignore file: %v", err)
 	}
+
 	return ignoreFile, nil
 }
 
-// This looks for a .gitignore file in the supplied path and returns
-// an object with the rules for ignoring files/folders
 func parseGitignore(path string) (*GitIgnore, error) {
-	var rules = new(Rules)
+	if !strings.Contains(path, ".gitignore") {
+		_, err := os.Stat(filepath.Join(path + ".gitignore"))
+		if err == nil {
+			path = filepath.Join(path + ".gitignore")
+		}
+	}
 	file, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	rules.Directory = make([]*regexp.Regexp, 0)
-	rules.Subdir = make([]*regexp.Regexp, 0)
-	rules.Character = make([]*regexp.Regexp, 0)
-	str := string(file)
-	lines := strings.Split(str, "\n")
-	var negation bool
-	for _, line := range lines {
-		strline := strings.TrimSpace(line)
-		if strline == "" || strings.HasPrefix(strline, "#") {
+	rules := &Rules{
+		Directory: make([]*regexp.Regexp, 0),
+		Subdir:    make([]*regexp.Regexp, 0),
+		Character: make([]*regexp.Regexp, 0),
+		Negate:    make([]*regexp.Regexp, 0),
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(file))
+	for scanner.Scan() {
+		line := scanner.Text()
+		// if the line is empty, or starts with a '#', ignore as a comment
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
-		if strings.HasPrefix(strline, "!") {
-			// Handle negation rules
-			// If the pattern contains a '*', convert it to '.*' for regex
-			if strings.Contains(strline[1:], "*") {
-				strline = strings.ReplaceAll(strline, "*", ".*")
-			}
-			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline[1:]) + `$`)
+		line = strings.Trim(line, " ")
+		// if the line starts with a '!' we treat it as a negated pattern
+		if strings.HasPrefix(line, "!") {
+			negatePattern := line[1:]
+			pattern := regexp.MustCompile(negatePattern)
 			if err != nil {
 				return nil, err
 			}
 			rules.Negate = append(rules.Negate, pattern)
-			negation = true
-			continue
-		}
-
-		// Check for negation rules that apply to the current line
-		if negation {
-
-			for i := 0; i < len(rules.Directory); i++ {
-				if rules.Directory[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
-					rules.Directory = append(rules.Directory[:i], rules.Directory[i+1:]...)
-					i--
-				}
+		} else {
+			pattern, err := convertToRegexp(line)
+			switch {
+			case strings.HasPrefix(line, "/"):
+				rules.Directory = append(rules.Directory, pattern)
+			case strings.Contains(line, "**"):
+				rules.Subdir = append(rules.Subdir, pattern)
+			default:
+				rules.Character = append(rules.Character, pattern)
 			}
-
-			for i := 0; i < len(rules.Character); i++ {
-				if rules.Character[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
-					rules.Character = append(rules.Character[:i], rules.Character[i+1:]...)
-					i--
-				}
-			}
-
-			for i := 0; i < len(rules.Subdir); i++ {
-				if strings.Contains(rules.Subdir[i].String(), "**") {
-					// If the rule contains '**', replace it with '.*' before comparing with strline
-					str := strings.ReplaceAll(regexp.QuoteMeta(strline), "**", ".*")
-					if rules.Subdir[i].String() == "^"+str+"$" {
-						rules.Subdir = append(rules.Subdir[:i], rules.Subdir[i+1:]...)
-						i--
-					}
-				} else {
-					if rules.Subdir[i].String() == "^"+regexp.QuoteMeta(strline)+"(/.*)?$" {
-						rules.Subdir = append(rules.Subdir[:i], rules.Subdir[i+1:]...)
-						i--
-					}
-				}
-			}
-			negation = false
-			continue
-		}
-		if strings.HasPrefix(strline, "/") {
-			// Handle directory rules
-			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + `(/\.*)?\?$`)
 			if err != nil {
 				return nil, err
 			}
-			rules.Directory = append(rules.Directory, pattern)
-		}
-		if strings.Contains(strline, "**") {
-			// Handle subdirectory rules
-			pattern, err := regexp.Compile("^" + strings.ReplaceAll(regexp.QuoteMeta(strline), "**", `.*`) + `$`)
-			if err != nil {
-				return nil, err
-			}
-			rules.Subdir = append(rules.Subdir, pattern)
-		}
-		if strings.ContainsAny(strline, "[]") {
-			// Handle character rules
-			pattern, err := regexp.Compile("^" + regexp.QuoteMeta(strline) + "$")
-			if err != nil {
-				return nil, err
-			}
-			rules.Character = append(rules.Character, pattern)
 		}
 	}
-	result := new(GitIgnore)
-	result.Rules = rules
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	result := &GitIgnore{
+		Path:         path,
+		Rules:        rules,
+		IgnoredFiles: make([]string, 0),
+	}
 	return result, nil
+}
+
+// This function needs to convert the found patterns in the .gitignore file
+// into a regular expression object
+func convertToRegexp(pattern string) (*regexp.Regexp, error) {
+	// Escape special characters in the pattern
+	pattern = regexp.QuoteMeta(pattern)
+	// Replace the escaped wildcard pattern "\*" with the unescaped version ".*"
+	pattern = strings.ReplaceAll(pattern, "\\*", ".*")
+	// Replace the escaped wildcard character "?" with the regex pattern "."
+	pattern = strings.ReplaceAll(pattern, "\\?", ".")
+
+	// Handle negation patterns that start with "!"
+	if strings.HasPrefix(pattern, "\\!") {
+		// Negation patterns should match the entire line
+		pattern = "^(?!" + pattern[2:] + ").*$"
+		fmt.Println(pattern)
+	} else {
+		// Non-negation patterns should match the pattern within the line
+		pattern = ".*" + pattern + ".*"
+		fmt.Println(pattern)
+	}
+
+	// Compile the regular expression
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	return compiled, nil
+}
+
+func removeRule(rules *[]*regexp.Regexp, strline string) {
+	for i := 0; i < len(*rules); i++ {
+		if (*rules)[i].String() == "^"+regexp.QuoteMeta(strline)+"$" {
+			*rules = append((*rules)[:i], (*rules)[i+1:]...)
+			i--
+		}
+	}
 }
 
 func (g *GitIgnore) IsIgnored(file string) bool {
